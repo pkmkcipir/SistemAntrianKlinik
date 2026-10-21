@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-.venv/
-venv/
-build/
-dist/
-installer_output/
-*.spec
-*.db
