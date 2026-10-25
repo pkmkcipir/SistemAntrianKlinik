@@ -1,0 +1,84 @@
+name: Build Windows (EXE + Installer)
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Jika dijalankan dari tag (mis. v1.2.0), nomor versi di aplikasi ikut disamakan.
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          sed -i "s/^APP_VERSION = .*/APP_VERSION = \"$V\"/" klinik/config.py
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: echo "v=$(python -c "from klinik.config import APP_VERSION; print(APP_VERSION)")" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build EXE (PyInstaller)
+        run: >
+          pyinstaller --noconfirm --clean --windowed
+          --name SistemAntrianKlinik
+          --icon assets/icon.ico
+          --add-data "assets;assets"
+          main.py
+
+      # Uji cepat: exe hasil build harus bisa start. Tidak menggagalkan build; lihat log bila gagal.
+      - name: Smoke test (exe bisa start)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\SistemAntrianKlinik\SistemAntrianKlinik.exe" -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content "$env:TEMP\SistemAntrianKlinik-selftest.log"
+          if ($p.ExitCode -ne 0) { throw "Smoke test gagal (exit code $($p.ExitCode))" }
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer (Inno Setup)
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.ver.outputs.v }}" installer.iss
+
+      - name: Zip versi portable
+        run: Compress-Archive -Path dist\SistemAntrianKlinik -DestinationPath "SistemAntrianKlinik-Portable-${{ steps.ver.outputs.v }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SistemAntrianKlinik-Setup
+          path: installer_output/*.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SistemAntrianKlinik-Portable
+          path: SistemAntrianKlinik-Portable-*.zip
+
+      - name: Publish GitHub Release (hanya untuk tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer_output/*.exe
+            SistemAntrianKlinik-Portable-*.zip
